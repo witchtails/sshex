@@ -49,6 +49,11 @@ defmodule SSHEx do
     Optionally it gets a `channel_timeout` for the underlying SSH channel opening,
     and an `exec_timeout` for the execution itself. Both default to 5000ms.
 
+    To allocate ptty, provide :ptty_opts in opts:
+      For example:
+        opts = [ptty_opts: [{:term, "xterm"}, {:width, 120}, {:height, 60}, {:pty_opts, [{:echo, 1}]}]]
+      see https://www.erlang.org/doc/apps/ssh/ssh_connection.html#ptty_alloc/3 for details
+
     Returns `{:ok,data,status}` on success. Otherwise `{:error, details}`.
 
     If `:separate_streams` is `true` then the response on success looks like `{:ok,stdout,stderr,status}`.
@@ -189,10 +194,16 @@ defmodule SSHEx do
   # Just a DRY to call internal `open_channel/3` and `exec/5`.
   #
   defp open_channel_and_exec(conn, cmd, opts) do
-    case open_channel(conn, opts[:channel_timeout], opts[:connection_module]) do
-      {:error, r} -> {:error, r}
-      {:ok, chn} -> exec(chn, conn, cmd, opts[:exec_timeout], opts[:connection_module])
+    with {:ok, chn} <- open_channel(conn, opts[:channel_timeout], opts[:connection_module]),
+         :success <- ptty_alloc(conn, chn, opts) do
+      exec(chn, conn, cmd, opts[:exec_timeout], opts[:connection_module])
     end
+  end
+
+  defp ptty_alloc(conn, chn, opts) do
+    if ptty_opts = opts[:ptty_opts],
+      do: :ssh_connection.ptty_alloc(conn, chn, ptty_opts),
+      else: :success
   end
 
   # Try to get the channel
