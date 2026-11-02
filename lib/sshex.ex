@@ -49,10 +49,13 @@ defmodule SSHEx do
     Optionally it gets a `channel_timeout` for the underlying SSH channel opening,
     and an `exec_timeout` for the execution itself. Both default to 5000ms.
 
-    To allocate ptty, provide :ptty_opts in opts:
-      For example:
-        opts = [ptty_opts: [{:term, "xterm"}, {:width, 120}, {:height, 60}, {:pty_opts, [{:echo, 1}]}]]
-      see https://www.erlang.org/doc/apps/ssh/ssh_connection.html#ptty_alloc/3 for details
+    To allocate a pseudo-terminal, provide `:ptty_opts`. For example:
+
+        opts = [ptty_opts: [term: "xterm", width: 120, height: 60, pty_opts: [echo: 1]]]
+
+    This calls `:ssh_connection.ptty_alloc/4` with `:channel_timeout` (default
+    5000ms). See https://www.erlang.org/doc/apps/ssh/ssh_connection.html#ptty_alloc/4
+    for the available options. A failure is returned as `{:error, details}`.
 
     Returns `{:ok,data,status}` on success. Otherwise `{:error, details}`.
 
@@ -200,10 +203,20 @@ defmodule SSHEx do
     end
   end
 
+  # Use the injected connection module and `channel_timeout`. `ptty_alloc/3`
+  # waits forever, and a bare `:failure` would be treated as a channel id.
   defp ptty_alloc(conn, chn, opts) do
-    if ptty_opts = opts[:ptty_opts],
-      do: :ssh_connection.ptty_alloc(conn, chn, ptty_opts),
-      else: :success
+    case opts[:ptty_opts] do
+      ptty_opts when ptty_opts in [nil, false] ->
+        :success
+
+      ptty_opts ->
+        case opts[:connection_module].ptty_alloc(conn, chn, ptty_opts, opts[:channel_timeout]) do
+          :success -> :success
+          :failure -> {:error, "Could not allocate ptty!"}
+          any -> any
+        end
+    end
   end
 
   # Try to get the channel
