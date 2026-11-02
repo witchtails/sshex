@@ -137,6 +137,57 @@ defmodule SSHExTest do
     end
   end
 
+  test "allocates a ptty when `:ptty_opts` is set" do
+    ptty_opts = [term: ~c"xterm", width: 120, height: 60, pty_opts: [echo: 1]]
+    opts = [connection_module: PttyAllocMock, channel_timeout: 1500, ptty_opts: ptty_opts]
+
+    send_regular_sequence("output", 0)
+    assert SSHEx.run(:mocked, ~c"somecommand", opts) == {:ok, "output", 0}
+    assert_received {:ptty_alloc, :mocked, :mocked, ^ptty_opts, 1500}
+
+    send_regular_sequence("output", 0)
+
+    assert Enum.to_list(SSHEx.stream(:mocked, ~c"somecommand", opts)) == [
+             stdout: "output",
+             status: 0
+           ]
+
+    assert_received {:ptty_alloc, :mocked, :mocked, ^ptty_opts, 1500}
+  end
+
+  test "does not allocate a ptty unless `:ptty_opts` is set" do
+    send_regular_sequence("output", 0)
+
+    assert SSHEx.run(:mocked, ~c"somecommand", connection_module: NoPttyAllocMock) ==
+             {:ok, "output", 0}
+  end
+
+  test "`:ssh_connection.ptty_alloc` failure" do
+    opts = [connection_module: PttyAllocFailureMock, ptty_opts: [term: ~c"xterm"]]
+
+    assert SSHEx.run(:mocked, ~c"somecommand", opts) == {:error, "Could not allocate ptty!"}
+
+    str = SSHEx.stream(:mocked, ~c"somecommand", opts)
+    assert Enum.to_list(str) == [error: "Could not allocate ptty!"]
+
+    assert_raise RuntimeError, "{:error, \"Could not allocate ptty!\"}", fn ->
+      SSHEx.cmd!(:mocked, ~c"somecommand", opts)
+    end
+  end
+
+  test "`:ssh_connection.ptty_alloc` error" do
+    opts = [connection_module: PttyAllocErrorMock, ptty_opts: [term: ~c"vt100"]]
+
+    assert SSHEx.run(:mocked, ~c"somecommand", opts) == {:error, :reason}
+
+    str = SSHEx.stream(:mocked, ~c"somecommand", opts)
+    assert Enum.to_list(str) == [error: :reason]
+
+    assert_raise RuntimeError, "{:error, :reason}", fn ->
+      SSHEx.cmd!(:mocked, ~c"somecommand", opts)
+    end
+  end
+
   test "receive only from given connection" do
     # send mocked response sequence to the mailbox for 2 different connections
     # any would do
@@ -205,6 +256,43 @@ end
 defmodule SessionChannelErrorMock do
   def session_channel(_, _), do: {:error, :reason}
   def exec(_, _, _, _), do: :success
+  def adjust_window(_, _, _), do: :ok
+  def close(_, _), do: :ok
+end
+
+defmodule PttyAllocMock do
+  def session_channel(conn, _), do: {:ok, conn}
+
+  def ptty_alloc(conn, channel, ptty_opts, timeout) do
+    send(self(), {:ptty_alloc, conn, channel, ptty_opts, timeout})
+    :success
+  end
+
+  def exec(_, _, _, _), do: :success
+  def adjust_window(_, _, _), do: :ok
+  def close(_, _), do: :ok
+end
+
+defmodule NoPttyAllocMock do
+  def session_channel(conn, _), do: {:ok, conn}
+  def ptty_alloc(_, _, _, _), do: raise("ptty_alloc should not be called")
+  def exec(_, _, _, _), do: :success
+  def adjust_window(_, _, _), do: :ok
+  def close(_, _), do: :ok
+end
+
+defmodule PttyAllocFailureMock do
+  def session_channel(_, _), do: {:ok, :mocked}
+  def ptty_alloc(_, _, _, _), do: :failure
+  def exec(_, _, _, _), do: raise("exec should not be called")
+  def adjust_window(_, _, _), do: :ok
+  def close(_, _), do: :ok
+end
+
+defmodule PttyAllocErrorMock do
+  def session_channel(_, _), do: {:ok, :mocked}
+  def ptty_alloc(_, _, _, _), do: {:error, :reason}
+  def exec(_, _, _, _), do: raise("exec should not be called")
   def adjust_window(_, _, _), do: :ok
   def close(_, _), do: :ok
 end
